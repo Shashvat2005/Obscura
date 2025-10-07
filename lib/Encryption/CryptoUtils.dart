@@ -82,11 +82,160 @@ Future<Map<String, int>> scanFolderCountsWrapper(Map args) async {
   return {'original': orig.length, 'encrypted': enc.length};
 }
 
-// Spawned in a separate isolate. Sends progress messages to the provided SendPort.
-// Messages:
-//  {'type':'total', 'total': int}
-//  {'type':'progress', 'processed': int}
-//  {'type':'done', 'encrypted': List<String>, 'original': List<String>}
+// Convert all supported images in a folder to PNG (runs in a background isolate via `compute`).
+// Expects args: { 'path': String, 'overwrite': bool (optional), 'exts': List<String> (optional) }
+Future<Map<String, int>> convertFolderImagesToPngWorker(Map args) async {
+  final String path = args['path'] as String? ?? '';
+  final bool overwrite = args['overwrite'] as bool? ?? false;
+  final List<String> exts = (args['exts'] is List)
+      ? List<String>.from(args['exts'] as List)
+      : ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic'];
+
+  final Map<String, int> stats = {'converted': 0, 'skipped': 0, 'errors': 0};
+
+  if (path.isEmpty) return stats;
+
+  final dir = Directory(path);
+  if (!await dir.exists()) return stats;
+
+  final files = dir
+      .listSync(recursive: false)
+      .whereType<File>()
+      .where((f) =>
+          exts.any((e) => f.path.toLowerCase().endsWith(e.toLowerCase())))
+      .toList()
+    ..sort((a, b) => a.path.compareTo(b.path));
+
+  for (final f in files) {
+    try {
+      final inPath = f.path;
+      final base = inPath.replaceAllMapped(RegExp(r'\.[^\.]+$'), (m) => '');
+      final outPath = '$base.png';
+
+      // If source already PNG and not overwriting, skip.
+      if (inPath.toLowerCase().endsWith('.png') && !overwrite) {
+        stats['skipped'] = stats['skipped']! + 1;
+        continue;
+      }
+
+      final bytes = await f.readAsBytes();
+      final image = img.decodeImage(bytes);
+      if (image == null) {
+        stats['skipped'] = stats['skipped']! + 1;
+        continue;
+      }
+
+      final pngBytes = img.encodePng(image);
+
+      final outFile = File(outPath);
+      await outFile.writeAsBytes(pngBytes);
+      if (overwrite && inPath != outPath) {
+        try {
+          await f.delete();
+        } catch (_) {}
+      }
+
+      stats['converted'] = stats['converted']! + 1;
+    } catch (e) {
+      stats['errors'] = stats['errors']! + 1;
+    }
+  }
+
+  return stats;
+}
+
+/// Isolate worker: convert all supported images in a folder to PNG and stream progress via SendPort
+/// msg args: { 'sendPort': SendPort, 'path': String, 'overwrite': bool, 'exts': List<String> }
+Future<void> convertFolderImagesToPngIsolate(Map msg) async {
+  final SendPort send = msg['sendPort'] as SendPort;
+  final String path = msg['path'] as String? ?? '';
+  final bool overwrite = msg['overwrite'] as bool? ?? true;
+  final List<String> exts = (msg['exts'] is List)
+      ? List<String>.from(msg['exts'] as List)
+      : ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic'];
+
+  final Map<String, int> stats = {'converted': 0, 'skipped': 0, 'errors': 0};
+
+  if (path.isEmpty) {
+    send.send({'type': 'total', 'total': 0});
+    send.send({'type': 'done', 'stats': stats});
+    return;
+  }
+
+  final dir = Directory(path);
+  if (!await dir.exists()) {
+    send.send({'type': 'total', 'total': 0});
+    send.send({'type': 'done', 'stats': stats});
+    return;
+  }
+
+  final files = dir
+      .listSync(recursive: false)
+      .whereType<File>()
+      .where((f) =>
+          exts.any((e) => f.path.toLowerCase().endsWith(e.toLowerCase())))
+      .toList()
+    ..sort((a, b) => a.path.compareTo(b.path));
+
+  send.send({'type': 'total', 'total': files.length});
+
+  int converted = 0;
+  for (var i = 0; i < files.length; i++) {
+    final f = files[i];
+    try {
+      final inPath = f.path;
+      // decode
+      final bytes = await f.readAsBytes();
+      final image = img.decodeImage(bytes);
+      if (image == null) {
+        stats['skipped'] = stats['skipped']! + 1;
+        continue;
+      }
+
+      final pngBytes = img.encodePng(image);
+
+      // write to temp .tmp then move to outPath (basename.png)
+      final outPath =
+          inPath.replaceAllMapped(RegExp(r'\.[^\.]+$'), (m) => '.png');
+      final tmpPath = '$outPath.tmp';
+      final tmp = File(tmpPath);
+      await tmp.writeAsBytes(pngBytes);
+      // rename/move tmp to outPath (overwrite if exists)
+      try {
+        if (await File(outPath).exists()) {
+          await File(outPath).delete();
+        }
+      } catch (_) {}
+      try {
+        await tmp.rename(outPath);
+      } catch (_) {
+        // fallback copy+delete
+        await tmp.copy(outPath);
+        try {
+          await tmp.delete();
+        } catch (_) {}
+      }
+
+      // remove original if requested and if different path
+      if (overwrite && inPath != outPath) {
+        try {
+          await f.delete();
+        } catch (_) {}
+      }
+
+      converted++;
+      stats['converted'] = converted;
+      // stream progress
+      send.send({'type': 'progress', 'processed': converted, 'index': i});
+    } catch (e) {
+      stats['errors'] = stats['errors']! + 1;
+      send.send({'type': 'error', 'path': f.path, 'error': e.toString()});
+    }
+  }
+
+  send.send({'type': 'done', 'stats': stats});
+}
+
 Future<void> scanFolderIsolate(Map msg) async {
   final SendPort send = msg['sendPort'] as SendPort;
   final String path = msg['path'] as String;

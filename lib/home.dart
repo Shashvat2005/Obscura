@@ -19,8 +19,10 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
+
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
+
   final db = DatabaseHelper();
   final jpe = JumblePixels();
 
@@ -32,37 +34,25 @@ class _HomePageState extends State<HomePage>
   List<String> passwords = [];
 
   String folderName = "";
-
-  late TabController _tabController;
-
-  int imgCount = 0;
-
-  bool checking = false;
-
   String currentKey = "";
   String currentBookmark = "";
   String currentPath = "";
 
+  bool checking = false;
+  bool isFolderSelected = false;
   bool isProcessing = false;
   bool isDeleting = false;
+  bool isSelecting = false;
 
   int totalFiles = 0;
   int processedFiles = 0;
+  int imgCount = 0;
 
   ReceivePort? _scanRp;
   Isolate? _scanIsolate;
   StreamSubscription? _scanSubscription;
+  late TabController _tabController;
 
-  String getRandomString(int length) {
-    String chars =
-        'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz1234567890';
-    Random rnd = Random();
-    return String.fromCharCodes(Iterable.generate(
-        length, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
-  }
-
-  // Multi-select functionality
-  bool isSelecting = false;
   Set<File> selectedImages = <File>{};
 
   @override
@@ -94,6 +84,95 @@ class _HomePageState extends State<HomePage>
     super.dispose();
   }
 
+
+  void deselectFolder() {
+    setState(() {
+      isFolderSelected = false;
+      currentPath = "";
+      currentBookmark = "";
+      currentKey = "";
+      folderName = "";
+      encryptedImages = [];
+      originalImages = [];
+      imgCount = 0;
+      checking = false;
+      isSelecting = false;
+      selectedImages.clear();
+      totalFiles = 0;
+      processedFiles = 0;
+    });
+  }
+
+  void toggleSelection(File image) {
+    setState(() {
+      if (selectedImages.contains(image)) {
+        selectedImages.remove(image);
+      } else {
+        selectedImages.add(image);
+      }
+
+      // Exit selection mode if no images are selected
+      if (selectedImages.isEmpty) {
+        isSelecting = false;
+      }
+    });
+  }
+
+  void selectAllImages() {
+    final images =
+        (_tabController.index == 0) ? originalImages : encryptedImages;
+    if (images.isEmpty) {
+      setState(() => isSelecting = false);
+      return;
+    }
+
+    final allSelected = images.every((f) => selectedImages.contains(f));
+    setState(() {
+      if (allSelected) {
+        // Deselect the current tab's images
+        for (final f in images) selectedImages.remove(f);
+      } else {
+        // Select all images in current tab
+        selectedImages.addAll(images);
+        isSelecting = true;
+      }
+    });
+  }
+
+  void clearSelection() {
+    setState(() {
+      selectedImages.clear();
+      isSelecting = false;
+    });
+  }
+
+  void _onShowImage(File file) async {
+    final ok = await _verifyFolderPassword();
+    if (!ok) return;
+
+    final images = _tabController.index == 1 ? encryptedImages : originalImages;
+    final start = images.indexWhere((f) => f.path == file.path);
+    if (start < 0) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => FullscreenImageGallery(
+        images: images,
+        startIndex: start,
+        encrypted: (_tabController.index == 1),
+        keyString: currentKey,
+        cacheSize: 10,
+      ),
+      fullscreenDialog: true,
+    ));
+  }
+
+  String getRandomString(int length) {
+    String chars =
+        'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz1234567890';
+    Random rnd = Random();
+    return String.fromCharCodes(Iterable.generate(
+        length, (_) => chars.codeUnitAt(rnd.nextInt(chars.length))));
+  }
+
   Future<void> loadFolder() async {
     print("loadFolder is called");
     final folders = await db.getAllRecords();
@@ -104,7 +183,7 @@ class _HomePageState extends State<HomePage>
 
     for (final folder in folders) {
       final folderPath = folder['folderPath'] as String;
-      final bookmark = folder['bookmark'] as String?;
+      final bookmark = folder['key'] as String?;
       final key = folder['key'] as String?;
       final password = folder['password'] as String?;
 
@@ -139,6 +218,7 @@ class _HomePageState extends State<HomePage>
 
   Future<void> pickFolder() async {
     print("pickFolder is called");
+    bool convertToPng = false;
     try {
       final key = getRandomString(10);
 
@@ -151,30 +231,198 @@ class _HomePageState extends State<HomePage>
         bookmark = await SecureBookmarks().bookmark(Directory(path));
       }
 
-      // Password functionalities
+      // Password functionalities + convert switch
       final TextEditingController _pwdController = TextEditingController();
       final String? entered = await showDialog<String>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Set Folder Password (optional):'),
-          content: PasswordField(
-            controller: _pwdController,
-            hintText: 'Leave empty for no password',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(""),
-              child: const Text('Skip'),
+        builder: (ctx) => StatefulBuilder(builder: (ctx2, setStateDialog) {
+          return AlertDialog(
+            title: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  Icon(Icons.lock,
+                      color: Theme.of(context).colorScheme.primary),
+                  SizedBox(width: 8),
+                  Text('Set Folder Password:')
+                ]),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Convert to PNG on import'),
+                  value: convertToPng,
+                  onChanged: (v) {
+                    setStateDialog(() => convertToPng = v);
+                  },
+                ),
+                const SizedBox(height: 8),
+                PasswordField(
+                  controller: _pwdController,
+                  hintText: 'Leave empty for no password',
+                ),
+              ],
             ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(_pwdController.text),
-              child: const Text('Save'),
-            ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(""),
+                child: const Text('Skip'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(_pwdController.text),
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        }),
       );
       String password = entered ?? "";
       password = await compute(hashPasswordWrapper, {'password': password});
+
+      // If user requested conversion, check whether conversion is actually needed.
+      if (convertToPng) {
+        final dir = Directory(path);
+        final exts = [
+          '.jpg',
+          '.jpeg',
+          '.png',
+          '.gif',
+          '.webp',
+          '.bmp',
+          '.heic'
+        ];
+        List<File> files;
+        try {
+          files = dir
+              .listSync(recursive: false)
+              .whereType<File>()
+              .where((f) => exts
+                  .any((e) => f.path.toLowerCase().endsWith(e.toLowerCase())))
+              .toList()
+            ..sort((a, b) => a.path.compareTo(b.path));
+        } catch (e) {
+          files = [];
+        }
+
+        // If there are no convertible files or all are already PNG, skip conversion UI.
+        final hasConvertible = files.isNotEmpty;
+        final allPng = hasConvertible &&
+            files.every((f) => f.path.toLowerCase().endsWith('.png'));
+        if (!hasConvertible || allPng) {
+          // nothing to convert — proceed with import
+          if (mounted) {
+            final msg = !hasConvertible
+                ? 'No convertible images found — importing folder.'
+                : 'All images are already PNG — importing folder.';
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text(msg)));
+          }
+        } else {
+          // run conversion isolate with progress (existing behavior)
+          // Prepare ReceivePort + control handles
+          final rp = ReceivePort();
+          Isolate? workerIsolate;
+          int totalFiles = 0;
+          int converted = 0;
+
+          // show progress dialog with StatefulBuilder so we can update UI inside it
+          late void Function(void Function()) setStateDialog;
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => StatefulBuilder(builder: (ctx2, setSt) {
+              setStateDialog = setSt;
+              final double progress =
+                  (totalFiles > 0) ? (converted / max(1, totalFiles)) : 0.0;
+              return AlertDialog(
+                title: const Text('Converting images to PNG'),
+                content: SizedBox(
+                  width: 360,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      LinearProgressIndicator(
+                          value: totalFiles > 0 ? progress : null),
+                      const SizedBox(height: 12),
+                      Text('$converted / $totalFiles converted'),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          );
+
+          // listen for messages from isolate
+          StreamSubscription<dynamic>? sub;
+          sub = rp.listen((dynamic message) async {
+            if (message is Map) {
+              final type = message['type'] as String?;
+              if (type == 'total') {
+                totalFiles = message['total'] as int? ?? 0;
+                if (mounted) setStateDialog(() {});
+              } else if (type == 'progress') {
+                converted = message['processed'] as int? ?? converted;
+                if (mounted) setStateDialog(() {});
+              } else if (type == 'error') {
+                if (mounted) {
+                  final p = message['path'] ?? '';
+                  final err = message['error'] ?? 'error';
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error converting $p: $err')));
+                }
+              } else if (type == 'done') {
+                final stats = message['stats'] as Map? ?? {};
+                converted = stats['converted'] as int? ?? converted;
+                // close dialog and cleanup
+                try {
+                  await sub?.cancel();
+                } catch (_) {}
+                try {
+                  rp.close();
+                } catch (_) {}
+                if (workerIsolate != null) {
+                  try {
+                    workerIsolate.kill(priority: Isolate.immediate);
+                  } catch (_) {}
+                }
+                if (mounted) {
+                  Navigator.of(context).pop(); // close progress dialog
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Converted $converted image(s)')),
+                  );
+                }
+              }
+            }
+          });
+
+          // spawn worker isolate
+          try {
+            workerIsolate = await Isolate.spawn(
+              convertFolderImagesToPngIsolate,
+              {
+                'sendPort': rp.sendPort,
+                'path': path,
+                'overwrite': true,
+                'exts': exts
+              },
+            );
+          } catch (e) {
+            // spawn failed: close dialog and show error
+            try {
+              await sub.cancel();
+            } catch (_) {}
+            try {
+              rp.close();
+            } catch (_) {}
+            if (mounted) {
+              Navigator.of(context).pop();
+              ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Conversion failed to start: $e')));
+            }
+          }
+        }
+      }
 
       if (!folderPaths.contains(path)) {
         setState(() {
@@ -265,6 +513,7 @@ class _HomePageState extends State<HomePage>
         encryptedImages = [];
         originalImages = [];
         imgCount = 0;
+        checking = false;
       }
     });
   }
@@ -272,6 +521,11 @@ class _HomePageState extends State<HomePage>
   Future<void> loadImagesFromFolder(
       String path, String bookmark, String key) async {
     print("loadImagesFromFolder is called");
+
+    // mark a folder as selected
+    setState(() {
+      isFolderSelected = true;
+    });
 
     // Cancel any previous running scan to avoid its "done" overwriting this load
     try {
@@ -396,42 +650,10 @@ class _HomePageState extends State<HomePage>
         checking = false;
         totalFiles = 0;
         processedFiles = 0;
+        isFolderSelected = true;
       });
       print("Error loading images: $e");
     }
-  }
-
-  void toggleSelection(File image) {
-    setState(() {
-      if (selectedImages.contains(image)) {
-        selectedImages.remove(image);
-      } else {
-        selectedImages.add(image);
-      }
-
-      // Exit selection mode if no images are selected
-      if (selectedImages.isEmpty) {
-        isSelecting = false;
-      }
-    });
-  }
-
-  void selectAllImages() {
-    setState(() {
-      if (selectedImages.length == originalImages.length) {
-        selectedImages.clear();
-        isSelecting = false;
-      } else {
-        selectedImages = Set<File>.from(originalImages);
-      }
-    });
-  }
-
-  void clearSelection() {
-    setState(() {
-      selectedImages.clear();
-      isSelecting = false;
-    });
   }
 
   Future<void> encryptSelectedImages(
@@ -576,8 +798,6 @@ class _HomePageState extends State<HomePage>
     }
   }
 
-  // Prompt for the folder password (if any) when accessing encrypted previews.
-  // Returns true when access is allowed.
   Future<bool> _verifyFolderPassword() async {
     // Only guard encrypted tab
     if (_tabController.index != 1) return true;
@@ -610,30 +830,13 @@ class _HomePageState extends State<HomePage>
     );
 
     if (entered == null) return false; // cancelled
-    if (await compute(verifyPasswordWrapper, {'stored': stored, 'candidate': entered})) return true;
+    if (await compute(
+        verifyPasswordWrapper, {'stored': stored, 'candidate': entered}))
+      return true;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Incorrect password')),
     );
     return false;
-  }
-
-  void _onShowImage(File file) async {
-    final ok = await _verifyFolderPassword();
-    if (!ok) return;
-
-    final images = _tabController.index == 1 ? encryptedImages : originalImages;
-    final start = images.indexWhere((f) => f.path == file.path);
-    if (start < 0) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => FullscreenImageGallery(
-        images: images,
-        startIndex: start,
-        encrypted: (_tabController.index == 1),
-        keyString: currentKey,
-        cacheSize: 10,
-      ),
-      fullscreenDialog: true,
-    ));
   }
 
   Widget _buildImageGrid(List<File> imagesToShow, bool checking,
@@ -652,7 +855,13 @@ class _HomePageState extends State<HomePage>
                   ),
             const SizedBox(height: 16),
             Text(
-              checking ? "Loading Images..." : "No images found",
+              checking
+                  ? "Loading Images..."
+                  : folderPaths.isEmpty
+                      ? "Import a folder to get started"
+                      : isFolderSelected
+                          ? "No images found"
+                          : "Select a folder from the left panel",
               style: TextStyle(
                 color: Colors.grey[600],
                 fontSize: 18,
@@ -808,100 +1017,115 @@ class _HomePageState extends State<HomePage>
           Row(
             children: [
               // LEFT SIDEBAR - Folder List
-              Container(
-                width: 280,
-                // Decoration of Container
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.withOpacity(0.2),
-                      blurRadius: 4,
-                      offset: const Offset(2, 0),
-                    ),
-                  ],
-                ),
-
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(4.0),
-                      //Header
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            "Folders",
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey[700],
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.add_circle_outline),
-                            onPressed: pickFolder,
-                            color: Theme.of(context).colorScheme.primary,
-                            tooltip: "Add folder",
-                          ),
-                        ],
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  // clicking the empty/anywhere area of the left pane deselects current folder
+                  deselectFolder();
+                },
+                child: Container(
+                  width: 280,
+                  // Decoration of Container
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surface,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withOpacity(0.2),
+                        blurRadius: 4,
+                        offset: const Offset(2, 0),
                       ),
-                    ),
+                    ],
+                  ),
 
-                    const Divider(height: 1),
-
-                    const SizedBox(height: 2),
-
-                    // Folders List
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: folderPaths.length,
-                        itemBuilder: (context, index) {
-                          final currPath = folderPaths[index];
-                          final name =
-                              currPath.split(Platform.pathSeparator).last;
-                          final currBookmark = bookmarkList[index];
-                          final key = keys[index];
-                          return ListTile(
-                            leading:
-                                const Icon(Icons.folder, color: Colors.amber),
-                            title: Text(
-                              name,
-                              overflow: TextOverflow.ellipsis,
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(4.0),
+                        //Header
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              "Folders",
                               style: TextStyle(
-                                fontWeight: folderName == name
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                color: folderName == name
-                                    ? Theme.of(context).colorScheme.primary
-                                    : Colors.grey[700],
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey[700],
                               ),
                             ),
-                            subtitle: Text(
-                              currPath,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  fontSize: 12, color: Colors.grey[600]),
+                            IconButton(
+                              icon: const Icon(Icons.add_circle_outline),
+                              onPressed: pickFolder,
+                              color: Theme.of(context).colorScheme.primary,
+                              tooltip: "Add folder",
                             ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_forever_outlined,
-                                  size: 20, color: Colors.red),
-                              onPressed: () =>
-                                  deleteFolder(currPath, currentKey),
-                              tooltip: "Delete Folder",
-                            ),
-                            onTap: () => loadImagesFromFolder(
-                                currPath, currBookmark, key),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 4),
-                          );
-                        },
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+
+                      const Divider(height: 1),
+
+                      const SizedBox(height: 2),
+
+                      // Folders List
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: folderPaths.length,
+                          itemBuilder: (context, index) {
+                            final currPath = folderPaths[index];
+                            final name =
+                                currPath.split(Platform.pathSeparator).last;
+                            final currBookmark = bookmarkList[index];
+                            final key = keys[index];
+                            // Wrap each tile in its own GestureDetector so taps on items
+                            // are handled by the item and won't be propagated to the
+                            // parent pane tap (which would deselect).
+                            return GestureDetector(
+                              behavior: HitTestBehavior.translucent,
+                              onTap: () => loadImagesFromFolder(
+                                  currPath, currBookmark, key),
+                              child: ListTile(
+                                leading: const Icon(Icons.folder,
+                                    color: Colors.amber),
+                                title: Text(
+                                  name,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontWeight: folderName == name
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    color: folderName == name
+                                        ? Theme.of(context).colorScheme.primary
+                                        : Colors.grey[700],
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  currPath,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 12, color: Colors.grey[600]),
+                                ),
+                                trailing: IconButton(
+                                  icon: const Icon(
+                                      Icons.delete_forever_outlined,
+                                      size: 20,
+                                      color: Colors.red),
+                                  onPressed: () =>
+                                      deleteFolder(currPath, currentKey),
+                                  tooltip: "Delete Folder",
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 4),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
 
@@ -949,35 +1173,59 @@ class _HomePageState extends State<HomePage>
                                   ),
                               ],
                             )),
-                            if (!isSelecting)
-                              TextButton(
-                                onPressed: () {
-                                  setState(() {
-                                    isSelecting = true;
-                                  });
-                                },
-                                child: const Text("Select"),
-                              ),
                             // Single "Show" button — shows the first image of the current tab
                             if (!isSelecting &&
                                 ((_tabController.index == 0 &&
                                         originalImages.isNotEmpty) ||
                                     (_tabController.index == 1 &&
                                         encryptedImages.isNotEmpty)))
-                              TextButton(
-                                onPressed: () {
-                                  final images = _tabController.index == 1
-                                      ? encryptedImages
-                                      : originalImages;
-                                  if (images.isNotEmpty)
-                                    _onShowImage(images.first);
-                                },
-                                child: const Text("Show"),
+                              Row(
+                                children: [
+                                  TextButton(
+                                    onPressed: () {
+                                      setState(() {
+                                        isSelecting = true;
+                                      });
+                                    },
+                                    child: const Text("Select"),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      final images = _tabController.index == 1
+                                          ? encryptedImages
+                                          : originalImages;
+                                      if (images.isNotEmpty)
+                                        _onShowImage(images.first);
+                                    },
+                                    child: const Text("Show"),
+                                  ),
+                                ],
                               ),
                             if (isSelecting)
-                              TextButton(
-                                onPressed: clearSelection,
-                                child: Text("Cancel"),
+                              Row(
+                                children: [
+                                  TextButton(
+                                    onPressed: selectAllImages,
+                                    child: Text(
+                                      // label toggles between Select All / Deselect All depending on current selection
+                                      ((_tabController.index == 0
+                                                      ? originalImages
+                                                      : encryptedImages)
+                                                  .isNotEmpty &&
+                                              (_tabController.index == 0
+                                                      ? originalImages
+                                                      : encryptedImages)
+                                                  .every((f) => selectedImages
+                                                      .contains(f)))
+                                          ? 'Deselect All'
+                                          : 'Select All',
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: clearSelection,
+                                    child: Text("Cancel"),
+                                  )
+                                ],
                               ),
                           ],
                         ),
@@ -1023,14 +1271,16 @@ class _HomePageState extends State<HomePage>
                           ignoring: isSelecting,
                           child: TabBar(
                             controller: _tabController,
-                            labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                            labelStyle:
+                                const TextStyle(fontWeight: FontWeight.w600),
                             tabs: [
                               Tab(
-                                  text:"Original Images ${originalImages.isNotEmpty ? '(${originalImages.length})' : ''}",
+                                text:
+                                    "Original Images ${originalImages.isNotEmpty ? '(${originalImages.length})' : ''}",
                               ),
                               Tab(
-                                  text:"Encrypted Images ${encryptedImages.isNotEmpty ? '(${encryptedImages.length})' : ''}"
-                              ),
+                                  text:
+                                      "Encrypted Images ${encryptedImages.isNotEmpty ? '(${encryptedImages.length})' : ''}"),
                             ],
                           ),
                         ),

@@ -122,6 +122,7 @@ class _FullscreenImageGalleryState extends State<FullscreenImageGallery> {
             icon: const Icon(Icons.close),
             onPressed: () => Navigator.of(context).pop()),
       ),
+      
       body: RawKeyboardListener(
         focusNode: _focusNode,
         autofocus: true,
@@ -151,10 +152,26 @@ class _FullscreenImageGalleryState extends State<FullscreenImageGallery> {
                     );
                   }
                   final bytes = snap.data!;
-                  return InteractiveViewer(
-                    maxScale: 8,
-                    child: Image.memory(bytes, fit: BoxFit.contain),
-                  );
+                  // Use LayoutBuilder + SizedBox + FittedBox inside InteractiveViewer
+                  // so the image fills the viewport and zoom/pan behaves correctly.
+                  return LayoutBuilder(builder: (context, constraints) {
+                    return InteractiveViewer(
+                      panEnabled: true,
+                      scaleEnabled: true,
+                      minScale: 1.0,
+                      maxScale: 8.0,
+                      boundaryMargin: const EdgeInsets.all(80),
+                      child: SizedBox(
+                        width: constraints.maxWidth,
+                        height: constraints.maxHeight,
+                        child: FittedBox(
+                          fit: BoxFit.contain,
+                          alignment: Alignment.center,
+                          child: Image.memory(bytes),
+                        ),
+                      ),
+                    );
+                  });
                 },
               ),
             ),
