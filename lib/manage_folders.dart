@@ -1,5 +1,5 @@
 import 'dart:io';
-
+import 'package:bcrypt/bcrypt.dart';
 import 'package:flutter/material.dart';
 import 'package:obscura/Components/FolderRecord.dart';
 import 'package:obscura/Components/PasswordField.dart';
@@ -24,6 +24,71 @@ class _ManageFoldersPageState extends State<ManageFoldersPage> {
   final DatabaseHelper _db = DatabaseHelper();
   List<FolderRecord> _folders = [];
   bool _loading = true;
+
+  // Ask user for current password and verify before allowing edits.
+  Future<bool> _requireCurrentPassword(FolderRecord rec) async {
+    print('requireCurrentPassword called');
+    // If no password set, no need to ask
+    if (rec.passwordHash.isEmpty) return true;
+
+    final ctrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    final entered = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Enter current password'),
+        content: Form(
+          key: formKey,
+          child: PasswordField(
+            controller: ctrl,
+            label: 'Current password',
+            allowEmpty: false,
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              if (!formKey.currentState!.validate()) return;
+              Navigator.of(ctx).pop(ctrl.text);
+            },
+            child: const Text('Unlock'),
+          ),
+        ],
+      ),
+    );
+
+    if (entered == null) return false; // user cancelled
+
+    try {
+      bool ok = false;
+      try{
+        ok = BCrypt.checkpw(entered, rec.passwordHash);
+      } catch (_) {
+        ok = false;
+      }
+      print(ok);
+      if (!ok) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Incorrect password')));
+        }
+        return false;
+      }
+      return true;
+    } catch (e) {
+      // If verification couldn't run, deny by default and inform user
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Password check failed, try again later')));
+      }
+      print(e);
+      return false;
+    }
+  }
 
   @override
   void initState() {
@@ -65,6 +130,10 @@ class _ManageFoldersPageState extends State<ManageFoldersPage> {
   }
 
   Future<void> _editFolder(FolderRecord rec) async {
+    // require current password before opening edit dialog
+    final allowed = await _requireCurrentPassword(rec);
+    if (!allowed) return;
+
     final pwdCtrl = TextEditingController();
     final showCurrentHash = rec.passwordHash.isNotEmpty;
     final formKey = GlobalKey<FormState>();
@@ -90,7 +159,7 @@ class _ManageFoldersPageState extends State<ManageFoldersPage> {
               const SizedBox(height: 12),
               PasswordField(
                 controller: pwdCtrl,
-                label: 'Password (leave blank to remove)', 
+                label: 'Password (leave blank to remove)',
               ),
             ],
           ),
@@ -202,5 +271,3 @@ class _ManageFoldersPageState extends State<ManageFoldersPage> {
     );
   }
 }
-
-

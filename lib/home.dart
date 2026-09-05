@@ -19,6 +19,8 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
+// touch id and windows hello
+// think about video encryption
 
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
@@ -130,7 +132,9 @@ class _HomePageState extends State<HomePage>
     setState(() {
       if (allSelected) {
         // Deselect the current tab's images
-        for (final f in images) selectedImages.remove(f);
+        for (final f in images) {
+          selectedImages.remove(f);
+        }
       } else {
         // Select all images in current tab
         selectedImages.addAll(images);
@@ -183,7 +187,7 @@ class _HomePageState extends State<HomePage>
 
     for (final folder in folders) {
       final folderPath = folder['folderPath'] as String;
-      final bookmark = folder['key'] as String?;
+      final bookmark = folder['bookmark'] as String?;
       final key = folder['key'] as String?;
       final password = folder['password'] as String?;
 
@@ -232,7 +236,7 @@ class _HomePageState extends State<HomePage>
       }
 
       // Password functionalities + convert switch
-      final TextEditingController _pwdController = TextEditingController();
+      final TextEditingController pwdController = TextEditingController();
       final String? entered = await showDialog<String>(
         context: context,
         builder: (ctx) => StatefulBuilder(builder: (ctx2, setStateDialog) {
@@ -259,7 +263,7 @@ class _HomePageState extends State<HomePage>
                 ),
                 const SizedBox(height: 8),
                 PasswordField(
-                  controller: _pwdController,
+                  controller: pwdController,
                   hintText: 'Leave empty for no password',
                 ),
               ],
@@ -270,7 +274,7 @@ class _HomePageState extends State<HomePage>
                 child: const Text('Skip'),
               ),
               TextButton(
-                onPressed: () => Navigator.of(ctx).pop(_pwdController.text),
+                onPressed: () => Navigator.of(ctx).pop(pwdController.text),
                 child: const Text('Save'),
               ),
             ],
@@ -831,8 +835,9 @@ class _HomePageState extends State<HomePage>
 
     if (entered == null) return false; // cancelled
     if (await compute(
-        verifyPasswordWrapper, {'stored': stored, 'candidate': entered}))
+        verifyPasswordWrapper, {'stored': stored, 'candidate': entered})) {
       return true;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Incorrect password')),
     );
@@ -1194,8 +1199,9 @@ class _HomePageState extends State<HomePage>
                                       final images = _tabController.index == 1
                                           ? encryptedImages
                                           : originalImages;
-                                      if (images.isNotEmpty)
+                                      if (images.isNotEmpty) {
                                         _onShowImage(images.first);
+                                      }
                                     },
                                     child: const Text("Show"),
                                   ),

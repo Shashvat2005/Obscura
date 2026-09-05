@@ -85,7 +85,9 @@ class _FullscreenImageGalleryState extends State<FullscreenImageGallery> {
     keys.sort((a, b) => (a - index).abs().compareTo((b - index).abs()));
     final keep = keys.take(maxEntries).toSet();
     final remove = cache.keys.where((k) => !keep.contains(k)).toList();
-    for (final r in remove) cache.remove(r);
+    for (final r in remove) {
+      cache.remove(r);
+    }
   }
 
   void _preloadAround(int center) {
@@ -129,8 +131,9 @@ class _FullscreenImageGalleryState extends State<FullscreenImageGallery> {
         onKey: (ev) {
           if (ev is RawKeyDownEvent) {
             if (ev.logicalKey == LogicalKeyboardKey.arrowLeft) _goTo(index - 1);
-            if (ev.logicalKey == LogicalKeyboardKey.arrowRight)
+            if (ev.logicalKey == LogicalKeyboardKey.arrowRight) {
               _goTo(index + 1);
+            }
           }
         },
         child: Stack(

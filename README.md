@@ -8,10 +8,11 @@ It combines powerful encryption with a simple and intuitive gallery UI — givin
 ## ✨ Features
 
 ### 🔐 Security & Privacy
-- End-to-end encryption with multiple supported algorithms (e.g., AES).
-- Passwords are **bcrypt hashed** before storage (never saved in plain text).
-- Folder-level password protection for enhanced security.
-- Decryption occurs **only in memory** (RAM) — never written back to disk in plain text.
+- **Keyed pixel-permutation transform** — the folder key is hashed with SHA-256, and the first 4 bytes seed a Fisher-Yates shuffle of the image's pixel array.
+- A **reserved marker pixel at (0,0)** tags an image as transformed, so the app can classify a folder without a database lookup and won't double-encrypt.
+- Images are converted to **PNG** before transformation, because the permutation is byte-exact and any lossy re-encode would destroy it.
+- Folder passwords are **bcrypt hashed** with a per-password salt (never saved in plain text).
+- Viewing decrypts **only in memory** (RAM) — plaintext is never written back to disk.
 
 ### 📂 Folder Management
 - Import and manage **multiple folders** simultaneously.
@@ -31,6 +32,26 @@ It combines powerful encryption with a simple and intuitive gallery UI — givin
 ### 💻 Cross-Platform Support
 - Works seamlessly on **macOS (`.dmg`)** and **Windows (`.exe`)**.
 - Designed to be distributed as a standalone desktop app.
+
+
+---
+
+## 🔎 Security model and known limitations
+
+I want to be upfront about what Obscura actually protects against, because the transform it uses is not what most people mean by "encryption".
+
+- **This is a transposition transform, not encryption.** Pixels are reordered, not substituted. The output image's colour histogram is identical to the input's, so it leaks statistical information about the original.
+- **The seed is truncated to 32 bits.** However strong the folder key is, the effective key space is capped at roughly 2^32.
+- **The folder key is stored in plaintext** in the local SQLite database. The bcrypt password gates the UI, not the data — an attacker with filesystem access can read the key and reverse the transform.
+- **The marker pixel overwrites the original pixel at (0,0)**, so that single pixel is not recoverable.
+- **Threat model:** this protects against casual browsing of a shared machine. It does not protect against an attacker with disk access or cryptanalytic intent.
+
+### 🧭 Planned rebuild
+
+- Derive an **AES-256** key from the password using **Argon2id** with a per-folder random salt.
+- Encrypt file bytes with **AES-GCM** for authenticated encryption.
+- Persist only the salt and the nonce — never the key.
+- Re-derive the key in memory each session.
 
 ---
 

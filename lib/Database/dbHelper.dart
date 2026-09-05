@@ -60,7 +60,7 @@ class DatabaseHelper {
     final dbClient = await db;
     final result = await dbClient.query(
       'encryption_info',
-      where: 'filePath = ?',
+      where: 'folderPath = ?',
       whereArgs: [filePath],
     );
     return result.isNotEmpty ? result.first : null;
@@ -181,9 +181,16 @@ class DatabaseHelper {
   //Get Encryption Type
   Future<int> getEncryptionType(String path) async{
     final dbClient=await db;
-    final result = dbClient.rawQuery('''SELECT enc_type FROM encryption_info WHERE folderPath='$path' ''');
-    print(result.toString());
-    return 0;
+    final result = await dbClient.query(
+      'encryption_info',
+      columns: ['enc_type'],
+      where: 'folderPath = ?',
+      whereArgs: [path],
+    );
+    if (result.isNotEmpty) {
+      return result.first['enc_type'] as int;
+    }
+    return 1; // default: Pixel Jumbling
   }
 
 
